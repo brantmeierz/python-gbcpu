@@ -2194,6 +2194,72 @@ def parse_opcode(opcode):
 			PC1()
 			return
 
+		#RL D [2 8] [Z 0 0 C]
+		elif opcode == 0x12:
+			print_asm(f"[CB][12] RL D")
+			carry_flag(D & BIT_7)
+			C_set(RL(D))
+			zero_flag(D)
+			unset_flag(F_N)
+			unset_flag(F_H)
+			PC1()
+			return
+
+		#RL E [2 8] [Z 0 0 C]
+		elif opcode == 0x13:
+			print_asm(f"[CB][13] RL E")
+			carry_flag(E & BIT_7)
+			C_set(RL(E))
+			zero_flag(E)
+			unset_flag(F_N)
+			unset_flag(F_H)
+			PC1()
+			return
+
+		#RL H [2 8] [Z 0 0 C]
+		elif opcode == 0x14:
+			print_asm(f"[CB][14] RL H")
+			carry_flag(H & BIT_7)
+			C_set(RL(H))
+			zero_flag(H)
+			unset_flag(F_N)
+			unset_flag(F_H)
+			PC1()
+			return
+
+		#RL L [2 8] [Z 0 0 C]
+		elif opcode == 0x15:
+			print_asm(f"[CB][15] RL L")
+			carry_flag(L & BIT_7)
+			C_set(RL(L))
+			zero_flag(L)
+			unset_flag(F_N)
+			unset_flag(F_H)
+			PC1()
+			return
+
+		#RL (HL) [2 16] [Z 0 0 C]
+		elif opcode == 0x16:
+			print_asm(f"[CB][16] RL (HL) => RL mem[{HL():04X}]")
+			carry_flag(mem_read(HL()) & BIT_7)
+			mem_set(HL(), RL(mem_read(HL())))
+			zero_flag(mem_read(HL()))
+			unset_flag(F_N)
+			unset_flag(F_H)
+			PC1()
+			return
+
+		#RL A [2 8] [Z 0 0 C]
+		elif opcode == 0x17:
+			print_asm(f"[CB][17] RL A")
+			carry_flag(A & BIT_7)
+			C_set(RL(A))
+			zero_flag(A)
+			unset_flag(F_N)
+			unset_flag(F_H)
+			PC1()
+			return
+
 		#BIT 7, H [2 8] [Z 0 1 -] ???
 		elif opcode == 0x7C:
 			print_asm(f"[CB][7C] BIT 7, H")
