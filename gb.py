@@ -7,6 +7,7 @@ palette = [(0, 63, 0), (46, 115, 32), (140, 191, 10), (160, 207, 10)]
 waiting_on_button = False
 interrupts_enabled = False
 print_assembly = True
+running = True
 
 def enable_interrupts():
 	global interrupts_enabled
@@ -33,6 +34,8 @@ def err_msg(msg, fatal=False):
 	Reports a formatted error message.
 	"""
 	if fatal:
+		global running
+		running = False
 		print("[!] FATAL ERROR:")
 		print(msg)
 		print("[!][!][!]")
@@ -62,7 +65,7 @@ def signed_8bit(val): #???
 #==========
 #= MEMORY =
 #==========
-memory = [0] * 0xFFFF
+memory = [0] * 0x10000
 
 def mem_init():
 	"""
@@ -72,7 +75,7 @@ def mem_init():
 	for i in range(0, 0xFFFF):
 		memory[i] = 0
 
-def mem_set(add, val):
+def mem_set(add: int, val: int) -> None:
 	"""
 	Sets memory at the specified address to the given value.
 
@@ -82,13 +85,13 @@ def mem_set(add, val):
 	global memory
 	# Address sanity checking
 	if add < 0x0000:
-		err_msg("Attempting to set memory at a negative address")
+		err_msg(f"Attempting to set memory at a negative address (0x{add:02X})", True)
 		return
 	elif add > 0xFFFF:
-		err_msg("Attempting to set memory above available range")
+		err_msg(f"Attempting to set memory above available range (0x{add:02X})", True)
 		return
 	elif add >= 0xE000 and add <= 0xFDFF:
-		err_msg("Writing to upper half of echo RAM, prohibited but proceeding")
+		err_msg(f"Writing to upper half of echo RAM ({add:02X}), prohibited but proceeding")
 
 	# Value sanity checking
 	if val < 0x00:
@@ -98,44 +101,61 @@ def mem_set(add, val):
 		err_msg("Attempting to set value of greater than 1 byte, proceeding with mask")
 
 	# Perform write operation
-	memory[add] = val & 0xFF
+	try:
+		memory[add] = val & 0xFF
+	except IndexError:
+		err_msg(f"Attempting to set memory outside of available range (0x{add:02X})", True)
+		return
+
+	# Handle serial I/O
+	if add == 0xFF01:
+		with open("serial_out.txt", "a") as f:
+			f.write(str(chr(val)))
+		memory[0xFF01] = 0x00
 
 	# Handle echo block
-	#if add >= 0xC000 and add <= 0xDFFF:
+	if add >= 0xC000 and add <= 0xDFFF:
+		print(f"{add - 0xC000 + 0xE000:02X}")
+		print(f"{add:02X} {val:02X}")
+		memory[add - 0xC000 + 0xE000] = val & 0XFF
 	#    print(add - (0xE000 - 0xC000))
 	#    memory[add + (0xE000 - 0xC000)] = val & 0xFF
 	#elif add >= 0xE000 and add <= 0xFDFF:
 	#    print(add - (0xE000 - 0xC000))
 	#    memory[add - (0xE000 - 0xC000)] = val & 0xFF
 
-def mem_read(add):
+def mem_read(add: disable_interrupts) -> int:
 	"""
 	Returns the value found at the specified memory address.
 	"""
 	#Address sanity checking
 	if add < 0x0000:
-		err_msg("Attempting to read memory at a negative address")
+		err_msg(f"Attempting to read memory at a negative address (0x{add:02X})", True)
 		return
 	elif add > 0xFFFF:
-		err_msg("Attempting to read memory above available range")
+		err_msg(f"Attempting to read memory above available range (0x{add:02X})", True)
 		return
 	else:
-		return memory[add]
+		try:
+			return memory[add]
+		except IndexError:
+			err_msg(f"Attempting to read memory outside of available range (0x{add:02X})", True)
+			return
 
 SP = 0x0000
-def SP_set(val):
+def SP_set(val: int) -> None:
 	"""
 	Sets the stack pointer to a value.
 	"""
 	global SP
 	SP = val & 0xFFFF
 
-def push_stack(val):
+def push_stack(val: int) -> None:
 	global SP
 	SP -= 1
 	mem_set(SP, val & 0xFF)
 
-def pop_stack(val):
+def pop_stack() -> int:
 	global SP
 	SP += 1
 	return mem_read(SP)
@@ -169,10 +189,14 @@ def load_cart(filename: str, verbose: bool=False) -> None:
 	global cart_name
 	with open(filename, 'rb') as f:
 		cart_data = f.read()
+		# Grab cartridge name
 		for i in range(0x0134, 0x0141):
 			if cart_data[i] != 0:
 				print(str(i) + ": " + str(cart_data[i]) + " " + chr(cart_data[i]))
 				cart_name = cart_name + chr(cart_data[i])
+		# Load cartridge data into memory
+		for i in range(0x100, 0x7FFF):
+			mem_set(i, int(cart_data[i]))
 
 	if verbose:
 		print("=================")
@@ -480,6 +504,29 @@ def nonzero_to_one(val):
 	else:
 		return 1
 
+#============
+#= GRAPHICS =
+#============
+lcdc_address = 0xFF40
+def lcd_display_enabled():
+	return nonzero_to_one(mem_read(lcdc_address) & BIT_7)
+def window_tile_map_display_select():
+	return nonzero_to_one(mem_read(lcdc_address) & BIT_6)
+def window_display_enabled():
+	return nonzero_to_one(mem_read(lcdc_address) & BIT_5)
+def bg_window_tile_data_select():
+	return nonzero_to_one(mem_read(lcdc_address) & BIT_4)
+def bg_tile_map_display_select():
+	return nonzero_to_one(mem_read(lcdc_address) & BIT_3)
+def sprite_size():
+	return nonzero_to_one(mem_read(lcdc_address) & BIT_2)
+def sprite_display_enabled():
+	return nonzero_to_one(mem_read(lcdc_address) & BIT_1)
+def bg_window_display_priority():
+	return nonzero_to_one(mem_read(lcdc_address) & BIT_0)
+
+stat_address = 0xFF41
+
 #=============
 #= OPERATION =
 #=============
@@ -573,7 +620,7 @@ def parse_opcode(opcode):
 
 	#LD A, (BC) [1 8] [- - - -]
 	elif opcode == 0x0A:
-		print_asm(f"[0A] LD A, (BC) => LD A, {BC()}")
+		print_asm(f"[0A] LD A, (BC) => LD A, mem[{BC():04X}] => LD A, {mem_read(BC()):02X}")
 		A_set(mem_read(BC()))
 		PC1()
 		return
@@ -649,6 +696,16 @@ def parse_opcode(opcode):
 		PC1()
 		return
 
+	#DEC D [1 4] [Z 1 H -]
+	elif opcode == 0x15:
+		print_asm(f"[15] DEC D")
+		halfcarry_flag(D, D - 1, True)
+		D_set(D - 1)
+		unset_flag(F_N)
+		zero_flag(D)
+		PC1()
+		return
+
 	#LD D, d8 [2 8] [- - - -]
 	elif opcode == 0x16:
 		print_asm(f"[16] LD D, d8 => LD D, {memory[PC + 1]:02X}")
@@ -667,6 +724,12 @@ def parse_opcode(opcode):
 		unset_flag(F_N)
 		unset_flag(F_H)
 		PC1()
+		return
+
+	#JR r8 [2 12/8] [- - - -]
+	elif opcode == 0x18:
+		print_asm(f"[18] JR r8 => JR {signed_8bit(mem_read(PC + 1)):02X}")
+		PC_set((PC + 2) + signed_8bit(mem_read(PC + 1)))
 		return
 
 	#LD A, (DE) [1 8] [- - - -]
@@ -688,6 +751,16 @@ def parse_opcode(opcode):
 		print_asm(f"[1C] INC E")
 		halfcarry_flag(E, E + 1)
 		E_set(E + 1)
+		unset_flag(F_N)
+		zero_flag(E)
+		PC1()
+		return
+
+	#DEC E [1 4] [Z 1 H -]
+	elif opcode == 0x1D:
+		print_asm(f"[1D] DEC E")
+		halfcarry_flag(E, E - 1, True)
+		E_set(E - 1)
 		unset_flag(F_N)
 		zero_flag(E)
 		PC1()
@@ -740,6 +813,14 @@ def parse_opcode(opcode):
 		H_set(H + 1)
 		zero_flag(H)
 		unset_flag(F_N)
+		PC1()
+		return
+
+	#LD A, (HL+) [2 8] [- - - -]
+	elif opcode == 0x2A:
+		print_asm(f"[2A] LD A, (HL+) => LD A, mem[{HL():04X}] => LD A, {mem_read(HL()):02X}")
+		A_set(mem_read(HL()))
+		HL_set(HL() + 1)
 		PC1()
 		return
 
@@ -1686,7 +1767,6 @@ def parse_opcode(opcode):
 	#SBC A, (HL) [1 8] [Z 1 H C]
 	elif opcode == 0x9E:
 		print_asm(f"[9E] SBC A, (HL) => SBC {A:02X}, mem[{HL():04X}] => SBC {A:02X}, {mem_read(HL()):02X}")
-		print_asm(f"[9E] SBC A, (HL) => SBC A, mem[{HL():02X}] => SBC A, {mem_read(HL()):02X}]")
 		sub = mem_read(HL()) + nonzero_to_one(F & F_C)
 		halfcarry_flag(A, A - sub, True)
 		if sub > A:
@@ -2100,13 +2180,19 @@ def parse_opcode(opcode):
 
 	#JP NZ, a16 [3 16/12] [- - - -]
 	elif opcode == 0xC2:
-		print_asm(f"[C2] JP NZ, a16 => JP NZ, {compose(mem_read(PC + 2), mem_read(PC + 1))}")
+		print_asm(f"[C2] JP NZ, a16 => JP NZ, {compose(mem_read(PC + 2), mem_read(PC + 1)):04X}")
 		if not flag_is_set(F_Z):
 			PC_set(compose(mem_read(PC + 2), mem_read(PC + 1)))
 			return
 		else:
 			PC3()
 			return
+
+	#JP a16 [3 12] [- - - -]
+	elif opcode == 0xC3:
+		print_asm(f"[C3] JP a16 => JP {compose(mem_read(PC + 2), mem_read(PC + 1)):04X}")
+		PC_set(compose(mem_read(PC + 2), mem_read(PC + 1)))
+		return
 
 	#PUSH BC [1 16] [- - - -]
 	elif opcode == 0xC5:
@@ -2151,7 +2237,7 @@ def parse_opcode(opcode):
 
 	#JP Z, a16 [3 16/12] [- - - -]
 	elif opcode == 0xCA:
-		print_asm(f"[CA] JP Z, a16 => JP Z, {compose(mem_read(PC + 2), mem_read(PC + 1))}")
+		print_asm(f"[CA] JP Z, a16 => JP Z, {compose(mem_read(PC + 2), mem_read(PC + 1)):04X}")
 		if flag_is_set(F_Z):
 			PC_set(compose(mem_read(PC + 2), mem_read(PC + 1)))
 			return
@@ -2284,13 +2370,13 @@ def parse_opcode(opcode):
 
 	#CALL d16 [3 24/12] [- - - -]
 	elif opcode == 0xCD:
-		print_asm(f"[CD] CALL d16 => CALL {compose(mem_read(PC + 2), mem_read(PC + 1))}")
+		print_asm(f"[CD] CALL d16 => CALL {compose(mem_read(PC + 2), mem_read(PC + 1)):04X}")
 		call(compose(mem_read(PC + 2), mem_read(PC + 1)))
 		return
 
 	#ADC A, d8 [2 8] [Z 0 H C]
 	elif opcode == 0xCE:
-		print_asm(f"[CE] ADC A, d8 => ADC A, {mem_read(PC + 1)}")
+		print_asm(f"[CE] ADC A, d8 => ADC A, {mem_read(PC + 1):02X}")
 		halfcarry_flag(A, A + mem_read(PC + 1) + nonzero_to_one(F & F_C))
 		carry_flag(A + mem_read(PC + 1) + nonzero_to_one(F & F_C))
 		A_set(A + mem_read(PC + 1) + nonzero_to_one(F & F_C))
@@ -2325,7 +2411,7 @@ def parse_opcode(opcode):
 
 	#JP NC, a16 [3 16/12] [- - - -]
 	elif opcode == 0xD2:
-		print_asm(f"[D2] JP NC, a16 => JP NC, {compose(mem_read(PC + 2), mem_read(PC + 1))}")
+		print_asm(f"[D2] JP NC, a16 => JP NC, {compose(mem_read(PC + 2), mem_read(PC + 1)):04X}")
 		if not flag_is_set(F_C):
 			PC_set(compose(mem_read(PC + 2), mem_read(PC + 1)))
 			return
@@ -2373,6 +2459,7 @@ def parse_opcode(opcode):
 
 	#JP C, a16 [3 16/12] [- - - -]
 	elif opcode == 0xDA:
+		print_asm(f"[DA] JP C, a16 => JP C, {compose(mem_read(PC + 2), mem_read(PC + 1)):04X}")
 		if not flag_is_set(F_C):
 			PC_set(compose(mem_read(PC + 2), mem_read(PC + 1)))
 			return
@@ -2648,29 +2735,65 @@ def parse_opcode(opcode):
 		return
 
 	else:
-		err_msg("Invalid opcode (" + hex(opcode) + ")", True)
+		err_msg(f"Invalid opcode ({opcode:02X})", True)
 
 def main():
 	global print_assembly
+	print_assembly = True
+	global running
 	#mem_init()
 	#print(len(memory))
 	#load_cart('blue.gb', True)
 	#run_program("python-gbcpu/DMG_ROM.bin")
-	load_bootstrap("python-gbcpu/DMG_ROM.bin", True)
-	load_cart('python-gbcpu/blue.gb', True)
-	PC_set(0x0000)
-	running = True
-	print_assembly = True
+
+
+
+	load_cart("python-gbcpu/ROMs/opus5.gb")
+	PC_set(0x100)
+	SP_set(0xFFFE)
 	while running:
 		opcode = mem_read(PC)
-		#print(f"PC: {PC:04X} | Opcode: {opcode:02X}")
+		print(f"PC: {PC:04X} | Opcode: {opcode:02X}")
 		parse_opcode(opcode)
-		#print_registers()
-		print("----")
 
-		if HL() == 0x7FFA:
-			print("FINISHED BLOCK")
-			running = False
+
+
+
+
+
+	# load_bootstrap("python-gbcpu/DMG_ROM.bin", True)
+	# load_cart('python-gbcpu/ROMS/Tetris.gb', True)
+	# PC_set(0x0000)
+	# #exit()
+	# breakpoints = []
+	# while running:
+	# 	opcode = mem_read(PC)
+	# 	print(f"PC: {PC:04X} | Opcode: {opcode:02X}")
+	# 	parse_opcode(opcode)
+
+
+
+
+
+
+
+		# command = input(">")
+		# if command == "exit":
+		# 	running = False
+		# elif command == "step":
+		 	# opcode = mem_read(PC)
+		 	# print(f"PC: {PC:04X} | Opcode: {opcode:02X}")
+		 	# parse_opcode(opcode)
+		# elif command == "run":
+
+		# else:
+		# 	print("Unknown command")
+		#print_registers()
+		#print("----")
+
+		#if HL() == 0x7FFA:
+		#	print("FINISHED BLOCK")
+		#	running = False
 
 		#if PC > 10:
 		#	print("FINISHED ZEROING BLOCK")
